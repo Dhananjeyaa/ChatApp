@@ -1,0 +1,107 @@
+@import "tailwindcss";
+
+@theme {
+  --color-wa-teal: #00a884;
+  --color-wa-teal-dark: #008069;
+  --color-wa-teal-light: #25d366;
+  --color-wa-bg-chat: #efeae2;
+  --color-wa-bubble-sent: #d9fdd3;
+  --color-wa-bubble-recv: #ffffff;
+  --color-wa-header: #f0f2f5;
+  --color-wa-sidebar: #ffffff;
+  --color-wa-hover: #f5f6f6;
+  --color-wa-active: #f0f2f5;
+  --color-wa-text-primary: #111b21;
+  --color-wa-text-secondary: #667781;
+  --color-wa-text-muted: #8696a0;
+  --color-wa-tick-blue: #53bdeb;
+  --color-wa-tick-gray: #8696a0;
+  --color-wa-border: #e9edef;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+@layer base {
+  body {
+    background-color: #d1d7db;
+    color: #111b21;
+    font-family: var(--font-sans);
+    min-height: 100vh;
+    margin: 0;
+    padding: 0;
+    overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Custom WhatsApp scrollbar */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background-color: rgba(11, 20, 26, 0.2);
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(11, 20, 26, 0.35);
+  }
+}
+
+/* WhatsApp Doodle SVG Wallpaper Background */
+.whatsapp-doodle-bg {
+  position: relative;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background-color: var(--chat-wallpaper-color, #efeae2);
+  background-image: radial-gradient(#d3cbbe 1.1px, transparent 1.1px), radial-gradient(#d3cbbe 1.1px, #efeae2 1.1px);
+  background-size: 44px 44px;
+  background-position: 0 0, 22px 22px;
+}
+
+.whatsapp-doodle-bg::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg width='120' height='120' viewBox='0 0 120 120' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath opacity='0.08' fill-rule='evenodd' clip-rule='evenodd' d='M28 14C23.5817 14 20 17.5817 20 22V32C20 36.4183 23.5817 40 28 40H30V46L36 40H44C48.4183 40 52 36.4183 52 32V22C52 17.5817 48.4183 14 44 14H28ZM86 74C81.5817 74 78 77.5817 78 82V92C78 96.4183 81.5817 100 86 100H94L100 106V100H102C106.418 100 110 96.4183 110 92V82C110 77.5817 106.418 74 102 74H86ZM18 84C18 79.5817 21.5817 76 26 76C30.4183 76 34 79.5817 34 84C34 88.4183 30.4183 92 26 92C21.5817 92 18 88.4183 18 84ZM88 28C88 23.5817 91.5817 20 96 20C100.418 20 104 23.5817 104 28C104 32.4183 100.418 36 96 36C91.5817 36 88 32.4183 88 28ZM62 50C57.5817 50 54 53.5817 54 58C54 62.4183 57.5817 66 62 66C66.4183 66 70 62.4183 70 58C70 53.5817 66.4183 50 62 50Z' fill='%23000000'/%3E%3C/svg%3E");
+  background-size: 120px 120px;
+  opacity: 0.35;
+  z-index: 0;
+  pointer-events: none;
+}
+
+
+/* Sent message tail (Right aligned) */
+.whatsapp-bubble-sent {
+  background-color: #d9fdd3;
+  position: relative;
+  box-shadow: 0 1px 0.5px rgba(11, 20, 26, 0.13);
+}
+
+.whatsapp-tail-sent::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: -8px;
+  width: 8px;
+  height: 13px;
+  background: radial-gradient(circle at top right, transparent 8px, #d9fdd3 8px);
+}
+
+/* Received message tail (Left aligned) */
+.whatsapp-bubble-received {
+  background-color: #ffffff;
+  position: relative;
+  box-shadow: 0 1px 0.5px rgba(11, 20, 26, 0.13);
+}
+
+.whatsapp-tail-received::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -8px;
+  width: 8px;
+  height: 13px;
+  background: radial-gradient(circle at top left, transparent 8px, #ffffff 8px);
+}

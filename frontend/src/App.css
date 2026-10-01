@@ -1,0 +1,26 @@
+/* Application CSS is modularly styled with Tailwind CSS via index.css */
+
+/* Slide-up animation for bottom-sheet modals on mobile */
+@keyframes slideUp {
+  from {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@media (min-width: 640px) {
+  @keyframes slideUp {
+    from {
+      transform: translateY(8px);
+      opacity: 0;
+    }
+    to {
+      transform: translateY(0);
+      opacity: 1;
+    }
+  }
+}
