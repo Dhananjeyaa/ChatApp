@@ -327,7 +327,7 @@ const Login = () => {
                   {authMode === 'phone' ? 'Wrong number? Edit' : 'Wrong email? Edit'}
                 </button>
 
-                <div className="flex flex-col items-center mb-5">
+                <div className="flex flex-col items-center mb-6">
                   <div className="w-12 h-12 rounded-full bg-[#00a884]/10 flex items-center justify-center mb-3">
                     {authMode === 'phone' ? (
                       <Phone size={22} className="text-[#00a884]" />
@@ -444,8 +444,8 @@ const Login = () => {
                     </div>
                     <input
                       type="text"
-                      value={name}
                       maxLength={25}
+                      value={name}
                       onChange={(e) => setName(e.target.value)}
                       placeholder="Type your name here"
                       autoFocus

@@ -3,10 +3,18 @@ import Message from '../models/Message.js';
 import Group from '../models/Group.js';
 import Otp from '../models/Otp.js';
 
-// @desc  Wipe all Users, Groups, Otps and Messages (dev/reset only)
+// @desc  Wipe all Users, Groups, Otps and Messages (development only)
 // @route GET /api/dev/reset-db
 // @route POST /api/dev/reset-db
 export const resetDatabase = async (req, res) => {
+  // Strict environment check
+  if (process.env.NODE_ENV !== 'development') {
+    return res.status(403).json({
+      success: false,
+      message: 'Forbidden: Database reset is strictly restricted to development environment.',
+    });
+  }
+
   try {
     const deletedMessages = await Message.deleteMany({});
     const deletedUsers = await User.deleteMany({});

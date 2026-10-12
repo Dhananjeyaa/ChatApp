@@ -1,31 +1,6 @@
 import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
 
-// const protect = async (req, res, next) => {
-//   let token;
-
-//   if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
-//     try {
-//       // Get token from header
-//       token = req.headers.authorization.split(' ')[1];
-
-//       // Verify token
-//       const decoded = jwt.verify(token, process.env.JWT_SECRET);
-
-//       // Get user from the token and attach to request
-//       req.user = await User.findById(decoded.id).select('-password');
-
-//       next();
-//     } catch (error) {
-//       console.error(error);
-//       res.status(401).json({ message: 'Not authorized, token failed' });
-//     }
-//   }
-
-//   if (!token) {
-//     res.status(401).json({ message: 'Not authorized, no token' });
-//   }
-// };
 export const protect = async (req, res, next) => {
   let token;
 
@@ -34,22 +9,25 @@ export const protect = async (req, res, next) => {
       token = req.headers.authorization.split(' ')[1];
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-      // decoded.id or decoded._id rendaiyum handle panrom
       const userId = decoded.id || decoded._id;
+      if (!userId) {
+        return res.status(401).json({ message: 'Not authorized, invalid token payload' });
+      }
 
-      req.user = await User.findById(userId).select('-password');
+      // Fast lean projection bypassing mongoose hydration overhead
+      req.user = await User.findById(userId)
+        .select('_id name phone email profilePic status lastSeen deletedChats')
+        .lean();
 
       if (!req.user) {
         return res.status(401).json({ message: 'Not authorized, user not found' });
       }
 
       return next();
-    } catch (error) {
+    } catch {
       return res.status(401).json({ message: 'Not authorized, token failed' });
     }
   }
 
   return res.status(401).json({ message: 'Not authorized, no token' });
 };
-
-// export { protect };

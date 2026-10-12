@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { X, Settings, Moon, Sun, Bell, Shield, Volume2, Check } from 'lucide-react';
+import { lockBodyScroll, unlockBodyScroll } from '../utils/scrollLock';
 
 const WALLPAPERS = [
   { id: 'classic', name: 'Classic Doodle', color: '#efeae2' },
@@ -27,19 +28,29 @@ const SettingsModal = ({ isOpen, onClose }) => {
     () => localStorage.getItem('chat_receipts') !== 'false'
   );
 
+  // Apply wallpaper color to CSS variable
   useEffect(() => {
     const selected = WALLPAPERS.find((w) => w.id === activeWallpaper) || WALLPAPERS[0];
     document.documentElement.style.setProperty('--chat-wallpaper-color', selected.color);
     localStorage.setItem('chat_wallpaper', selected.id);
   }, [activeWallpaper]);
 
+  // Instant theme update
   const handleThemeChange = (newTheme) => {
     setTheme(newTheme);
     localStorage.setItem('chat_theme', newTheme);
     if (newTheme === 'dark') {
       document.documentElement.classList.add('dark');
+      document.documentElement.setAttribute('data-theme', 'dark');
+      if (activeWallpaper === 'classic') {
+        setActiveWallpaper('dark-doodle');
+      }
     } else {
       document.documentElement.classList.remove('dark');
+      document.documentElement.setAttribute('data-theme', 'light');
+      if (activeWallpaper === 'dark-doodle') {
+        setActiveWallpaper('classic');
+      }
     }
   };
 
@@ -61,16 +72,16 @@ const SettingsModal = ({ isOpen, onClose }) => {
     localStorage.setItem('chat_receipts', String(val));
   };
 
+  // Safe ref-counted body scroll lock and escape key handling
   useEffect(() => {
     if (!isOpen) return;
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+    lockBodyScroll();
     const handleKeyDown = (e) => {
       if (e.key === 'Escape') onClose?.();
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => {
-      document.body.style.overflow = prevOverflow;
+      unlockBodyScroll();
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [isOpen, onClose]);
@@ -79,12 +90,12 @@ const SettingsModal = ({ isOpen, onClose }) => {
 
   return createPortal(
     <div
-      className="fixed inset-0 w-screen h-screen bg-black/50 backdrop-blur-xs z-[9999] flex items-center justify-center p-3 sm:p-4 overflow-y-auto transition-opacity"
+      className="fixed inset-0 w-screen h-screen bg-black/50 backdrop-blur-xs z-[1000] flex items-center justify-center p-3 sm:p-4 overflow-y-auto transition-opacity"
       style={{ backdropFilter: 'blur(4px)', WebkitBackdropFilter: 'blur(4px)' }}
       onClick={onClose}
     >
       <div
-        className="bg-white rounded-2xl sm:rounded-3xl max-w-md w-full shadow-2xl relative border border-[#e9edef] overflow-hidden flex flex-col max-h-[92vh] sm:max-h-[85vh] my-auto animate-in fade-in zoom-in-95 duration-150 shrink-0"
+        className="bg-white dark:bg-[#111b21] rounded-2xl sm:rounded-3xl max-w-md w-full shadow-2xl relative border border-[#e9edef] dark:border-[#222e35] overflow-hidden flex flex-col max-h-[92vh] sm:max-h-[85vh] my-auto animate-in fade-in zoom-in-95 duration-150 shrink-0 text-[#111b21] dark:text-[#e9edef]"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -115,8 +126,8 @@ const SettingsModal = ({ isOpen, onClose }) => {
                 onClick={() => handleThemeChange('light')}
                 className={`flex items-center justify-center gap-2 p-3 rounded-xl border text-sm font-medium transition-all cursor-pointer ${
                   theme === 'light'
-                    ? 'border-[#00a884] bg-[#e7f7f3] text-[#00a884]'
-                    : 'border-[#e9edef] hover:bg-[#f0f2f5] text-[#54656f]'
+                    ? 'border-[#00a884] bg-[#e7f7f3] dark:bg-[#00a884]/20 text-[#00a884]'
+                    : 'border-[#e9edef] dark:border-[#222e35] hover:bg-[#f0f2f5] dark:hover:bg-[#202c33] text-[#54656f] dark:text-[#8696a0]'
                 }`}
               >
                 <Sun size={17} />
@@ -127,8 +138,8 @@ const SettingsModal = ({ isOpen, onClose }) => {
                 onClick={() => handleThemeChange('dark')}
                 className={`flex items-center justify-center gap-2 p-3 rounded-xl border text-sm font-medium transition-all cursor-pointer ${
                   theme === 'dark'
-                    ? 'border-[#00a884] bg-[#111b21] text-white'
-                    : 'border-[#e9edef] hover:bg-[#f0f2f5] text-[#54656f]'
+                    ? 'border-[#00a884] bg-[#202c33] text-white shadow-xs'
+                    : 'border-[#e9edef] dark:border-[#222e35] hover:bg-[#f0f2f5] dark:hover:bg-[#202c33] text-[#54656f] dark:text-[#8696a0]'
                 }`}
               >
                 <Moon size={17} />
@@ -151,7 +162,7 @@ const SettingsModal = ({ isOpen, onClose }) => {
                     type="button"
                     onClick={() => setActiveWallpaper(wp.id)}
                     className={`h-16 rounded-xl relative border-2 transition-all flex flex-col items-center justify-center p-1 overflow-hidden cursor-pointer ${
-                      isSelected ? 'border-[#00a884] scale-105' : 'border-transparent hover:scale-102'
+                      isSelected ? 'border-[#00a884] scale-105 shadow-sm' : 'border-transparent hover:scale-102'
                     }`}
                     style={{ backgroundColor: wp.color }}
                     title={wp.name}
@@ -164,8 +175,8 @@ const SettingsModal = ({ isOpen, onClose }) => {
                     <span
                       className={`text-[9px] font-medium mt-1 truncate px-1 rounded ${
                         wp.color === '#0b141a' || wp.color === '#12393d'
-                          ? 'text-white/90 bg-black/40'
-                          : 'text-black/80 bg-white/60'
+                          ? 'text-white/90 bg-black/50'
+                          : 'text-black/80 bg-white/70'
                       }`}
                     >
                       {wp.name}
@@ -182,11 +193,11 @@ const SettingsModal = ({ isOpen, onClose }) => {
               Notifications & Sounds
             </span>
             <div className="space-y-3">
-              <label className="flex items-center justify-between cursor-pointer p-2.5 rounded-xl hover:bg-[#f0f2f5] transition-colors">
+              <label className="flex items-center justify-between cursor-pointer p-2.5 rounded-xl hover:bg-[#f0f2f5] dark:hover:bg-[#202c33] transition-colors">
                 <div className="flex items-center gap-3">
                   <Volume2 size={18} className="text-[#8696a0]" />
                   <div>
-                    <span className="text-sm font-medium text-[#111b21] block">Message Sounds</span>
+                    <span className="text-sm font-medium text-[#111b21] dark:text-[#e9edef] block">Message Sounds</span>
                     <span className="text-xs text-[#8696a0]">Play audio for messages</span>
                   </div>
                 </div>
@@ -198,11 +209,11 @@ const SettingsModal = ({ isOpen, onClose }) => {
                 />
               </label>
 
-              <label className="flex items-center justify-between cursor-pointer p-2.5 rounded-xl hover:bg-[#f0f2f5] transition-colors">
+              <label className="flex items-center justify-between cursor-pointer p-2.5 rounded-xl hover:bg-[#f0f2f5] dark:hover:bg-[#202c33] transition-colors">
                 <div className="flex items-center gap-3">
                   <Bell size={18} className="text-[#8696a0]" />
                   <div>
-                    <span className="text-sm font-medium text-[#111b21] block">Notifications</span>
+                    <span className="text-sm font-medium text-[#111b21] dark:text-[#e9edef] block">Notifications</span>
                     <span className="text-xs text-[#8696a0]">Show desktop notifications</span>
                   </div>
                 </div>
@@ -221,11 +232,11 @@ const SettingsModal = ({ isOpen, onClose }) => {
             <span className="text-xs font-semibold text-[#00a884] uppercase tracking-wider block mb-3">
               Privacy
             </span>
-            <label className="flex items-center justify-between cursor-pointer p-2.5 rounded-xl hover:bg-[#f0f2f5] transition-colors">
+            <label className="flex items-center justify-between cursor-pointer p-2.5 rounded-xl hover:bg-[#f0f2f5] dark:hover:bg-[#202c33] transition-colors">
               <div className="flex items-center gap-3">
                 <Shield size={18} className="text-[#8696a0]" />
                 <div>
-                  <span className="text-sm font-medium text-[#111b21] block">Read Receipts</span>
+                  <span className="text-sm font-medium text-[#111b21] dark:text-[#e9edef] block">Read Receipts</span>
                   <span className="text-xs text-[#8696a0]">Show blue checkmarks when messages are read</span>
                 </div>
               </div>
@@ -240,7 +251,7 @@ const SettingsModal = ({ isOpen, onClose }) => {
         </div>
 
         {/* Footer */}
-        <div className="p-4 bg-[#f0f2f5] border-t border-[#e9edef] shrink-0 flex justify-end">
+        <div className="p-4 bg-[#f0f2f5] dark:bg-[#202c33] border-t border-[#e9edef] dark:border-[#222e35] shrink-0 flex justify-end">
           <button
             type="button"
             onClick={onClose}

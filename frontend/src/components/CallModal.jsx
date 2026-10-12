@@ -9,10 +9,9 @@ import {
   Video,
   VideoOff,
   Phone,
-  Maximize2,
-  Minimize2,
 } from 'lucide-react';
 import Avatar from './Avatar';
+import { lockBodyScroll, unlockBodyScroll } from '../utils/scrollLock';
 
 const CallModal = ({ isOpen, onClose, user, type = 'voice' }) => {
   const [callStatus, setCallStatus] = useState('Calling...');
@@ -22,6 +21,15 @@ const CallModal = ({ isOpen, onClose, user, type = 'voice' }) => {
   const [isVideoEnabled, setIsVideoEnabled] = useState(type === 'video');
   const [cameraStream, setCameraStream] = useState(null);
   const videoRef = useRef(null);
+
+  // Safe ref-counted body scroll locking
+  useEffect(() => {
+    if (!isOpen) return;
+    lockBodyScroll();
+    return () => {
+      unlockBodyScroll();
+    };
+  }, [isOpen]);
 
   // Call lifecycle simulation: Calling -> Ringing -> Connected with timer
   useEffect(() => {
@@ -43,7 +51,6 @@ const CallModal = ({ isOpen, onClose, user, type = 'voice' }) => {
       setCallStatus('Connected');
     }, 4000);
 
-    // If video call, attempt to request local camera preview
     if (type === 'video') {
       navigator.mediaDevices
         ?.getUserMedia({ video: true, audio: true })
@@ -91,7 +98,7 @@ const CallModal = ({ isOpen, onClose, user, type = 'voice' }) => {
 
   return createPortal(
     <div
-      className="fixed inset-0 w-screen h-screen bg-black/75 z-[9999] flex items-center justify-center p-3 sm:p-4 select-none overflow-y-auto transition-opacity"
+      className="fixed inset-0 w-screen h-screen bg-black/80 z-[1200] flex items-center justify-center p-3 sm:p-4 select-none overflow-y-auto transition-opacity"
       style={{ backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)' }}
     >
       <div className="bg-[#111b21] w-full max-w-md rounded-2xl sm:rounded-3xl overflow-hidden shadow-2xl border border-white/10 flex flex-col items-center justify-between min-h-[480px] sm:min-h-[520px] my-auto relative text-white p-6 sm:p-8 animate-in fade-in zoom-in-95 duration-150 shrink-0">

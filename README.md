@@ -1,36 +1,40 @@
 # ChatApp 💬
 
-A modern, secure, full-stack real-time chat application featuring dual-OTP authentication (Email & SMS), responsive modern UI, and permanent message deletion.
+A production-grade, high-concurrency, ultra-low latency real-time chat application featuring Redis presence caching, Socket.IO cluster adaptation, dual-OTP authentication (Email & SMS), cursor-based pagination, and permanent message deletion.
 
-## 🚀 Key Features
+## 🚀 Architectural Highlights & Key Features
 
-- **Dual-OTP Authentication**: Fast and secure verification via Gmail SMTP (Google App Password) and SMS (Fast2SMS / Twilio).
-- **Real-Time Messaging**: Built on Socket.IO for low-latency bidirectional communication.
+- **Redis Caching & Real-Time Presence**: In-memory Redis store (`ioredis`) for tracking online status and socket mappings with zero database writes during connection/disconnection.
+- **Horizontal Scaling**: Socket.IO Redis Adapter (`@socket.io/redis-adapter`) enabling seamless multi-instance horizontal clustering.
+- **Cursor-Based Pagination**: Ultra-fast message history retrieval using indexed `_id: { $lt: cursor }` pagination with `.lean()` and targeted field projections.
+- **Optimized MongoDB Compound Indexes**: High-performance indexes on `{ conversationId: 1, createdAt: -1 }`, `{ senderId: 1, receiverId: 1, createdAt: -1 }`, and `{ conversationId: 1, _id: -1 }`.
+- **API Security & Rate Limiting**: Distributed rate limiting (`express-rate-limit` with `rate-limit-redis`) protecting OTP and message endpoints against DDoS and SMS cost drain.
+- **Network Optimization**: HTTP response compression (`compression`) and strict payload limits.
+- **Render Performance & Memory Leak Prevention**: Core components (`Sidebar`, `ChatArea`/`ChatContainer`, `MessageItem`, `ChatLayout`) wrapped in `React.memo` with custom shallow equality comparators and leak-proof Socket.IO cleanup.
+- **Dual-OTP Authentication**: Fast verification via Gmail SMTP (Google App Password) and SMS (Fast2SMS / Twilio).
 - **Permanent Message Deletion**: Full deletion capabilities ensuring user privacy and data security.
-- **Modern Responsive UI**: Clean, mobile-friendly interface designed with React and TailwindCSS.
-- **JWT & Password Security**: Industry-standard bcrypt password hashing and token-based session handling.
-- **MongoDB & Mongoose**: Resilient database modeling and query performance.
 
 ## 📁 Project Structure
 
 ```
 ChatApp/
 ├── backend/
-│   ├── config/          # Database and service configurations
-│   ├── controllers/     # Route logic (Auth, Chat, Message, User)
-│   ├── middleware/      # Auth guard, error handling
-│   ├── models/          # Mongoose schemas (User, Message, Conversation)
+│   ├── config/          # MongoDB & Redis configurations
+│   ├── controllers/     # Route logic (Auth, Message, User, Dev)
+│   ├── middleware/      # Auth guard, rate limiters
+│   ├── models/          # Mongoose schemas (User, Message, Group, Otp)
 │   ├── routes/          # Express route definitions
+│   ├── socket/          # Socket.io server with Redis presence
 │   ├── utils/           # OTP generation, mailer, SMS dispatchers
 │   ├── .env.example     # Environment template (NO secrets)
 │   ├── package.json
 │   └── server.js        # Main backend entry point
 ├── frontend/
-│   ├── src/             # React components, contexts, hooks, pages
-│   ├── index.html
+│   ├── src/             # React components (memoized), contexts, hooks, pages
+│   ├── index.html       # Updated title & modern SVG favicon
 │   ├── package.json
 │   └── vite.config.js
-├── .gitignore           # Root gitignore protecting .env and node_modules
+├── .gitignore           # Strict ignore protecting .env and node_modules
 ├── package.json         # Root runner script
 └── README.md
 ```
@@ -40,6 +44,7 @@ ChatApp/
 ### 1. Prerequisites
 - Node.js (v18+ recommended)
 - MongoDB instance (Local or Atlas)
+- Redis instance (Local or Cloud; app gracefully falls back to in-memory if Redis is offline)
 - Gmail account with an [App Password](https://myaccount.google.com/apppasswords)
 
 ### 2. Environment Setup
@@ -51,6 +56,9 @@ MONGO_URI=mongodb://127.0.0.1:27017/chatapp
 JWT_SECRET=your_jwt_secret_key_here
 CLIENT_URL=http://localhost:5173
 NODE_ENV=development
+
+# Redis (Optional; defaults to redis://127.0.0.1:6379 with automatic in-memory fallback)
+REDIS_URL=redis://127.0.0.1:6379
 
 # Email OTP (Gmail SMTP)
 EMAIL_USER=your_email@gmail.com

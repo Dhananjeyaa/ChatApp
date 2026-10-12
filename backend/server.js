@@ -1,12 +1,16 @@
 import express from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
+import compression from 'compression';
 import { createServer } from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
 import connectDB from './config/db.js';
 import User from './models/User.js';
+
+// Rate Limiter
+import { generalRateLimiter } from './middleware/rateLimiter.js';
 
 // Routes
 import authRoutes from './routes/authRoutes.js';
@@ -27,13 +31,25 @@ const PORT = process.env.PORT || 5000;
 const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:5173';
 const server = createServer(app);
 
-// Init Socket.io
+// Init Socket.io with Redis Adapter support
 initSocket(server);
 
-// Middleware
-app.use(cors({ origin: CLIENT_URL, credentials: true })); // '*' + credentials is invalid in browsers anyway
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true }));
+// Performance & Security Middleware
+app.use(compression({
+  filter: (req, res) => {
+    if (req.headers['x-no-compression']) return false;
+    return compression.filter(req, res);
+  },
+  threshold: 1024, // only compress responses above 1KB
+}));
+
+app.use(cors({ origin: CLIENT_URL, credentials: true }));
+// Strict payload size limits to prevent memory exhaustion and DoS
+app.use(express.json({ limit: '2mb' }));
+app.use(express.urlencoded({ extended: true, limit: '2mb' }));
+
+// Apply general API rate limiter to protect all /api routes
+app.use('/api', generalRateLimiter);
 
 // API Routes
 app.use('/api/auth', authRoutes);
@@ -49,9 +65,9 @@ if (process.env.NODE_ENV !== 'production') {
 app.get('/', (req, res) => res.json({ status: 'ChatApp API running' }));
 
 const startServer = async () => {
-  await connectDB(); // connects (or exits) BEFORE the server starts accepting traffic
+  await connectDB();
 
-  // Drop legacy strict phone_1 and email_1 indexes so MongoDB rebuilds them with sparse: true
+  // Drop legacy strict indexes if present
   User.collection.dropIndex('phone_1').catch(() => {});
   User.collection.dropIndex('email_1').catch(() => {});
 

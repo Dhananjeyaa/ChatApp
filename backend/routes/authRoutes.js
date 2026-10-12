@@ -8,8 +8,16 @@ import {
   getMe,
 } from '../controllers/authController.js';
 import { protect } from '../middleware/authMiddleware.js';
+import { authRateLimiter } from '../middleware/rateLimiter.js';
 
 const router = express.Router();
+
+// Apply auth rate limiting to sensitive OTP creation/verification endpoints
+router.use('/send-phone-otp', authRateLimiter);
+router.use('/verify-phone-otp', authRateLimiter);
+router.use('/send-email-otp', authRateLimiter);
+router.use('/verify-email-otp', authRateLimiter);
+router.use('/setup-profile', authRateLimiter);
 
 // Phone OTP flow
 router.post('/send-phone-otp', sendPhoneOtp);

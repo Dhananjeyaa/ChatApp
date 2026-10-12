@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { X, Camera, Check, Edit2, LogOut, Phone, Mail, User } from 'lucide-react';
 import Avatar from './Avatar';
 import axios from 'axios';
+import { lockBodyScroll, unlockBodyScroll } from '../utils/scrollLock';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
@@ -26,14 +27,13 @@ const ProfileModal = ({ isOpen, onClose, user, onUpdateUser, onLogout }) => {
 
   useEffect(() => {
     if (!isOpen) return;
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+    lockBodyScroll();
     const handleKeyDown = (e) => {
       if (e.key === 'Escape') onClose?.();
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => {
-      document.body.style.overflow = prevOverflow;
+      unlockBodyScroll();
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [isOpen, onClose]);
@@ -83,12 +83,12 @@ const ProfileModal = ({ isOpen, onClose, user, onUpdateUser, onLogout }) => {
 
   return createPortal(
     <div
-      className="fixed inset-0 w-screen h-screen bg-black/50 backdrop-blur-xs z-[9999] flex items-center justify-center p-3 sm:p-4 overflow-y-auto transition-opacity"
+      className="fixed inset-0 w-screen h-screen bg-black/50 backdrop-blur-xs z-[1000] flex items-center justify-center p-3 sm:p-4 overflow-y-auto transition-opacity"
       style={{ backdropFilter: 'blur(4px)', WebkitBackdropFilter: 'blur(4px)' }}
       onClick={onClose}
     >
       <div
-        className="bg-white rounded-2xl sm:rounded-3xl max-w-md w-full shadow-2xl relative border border-[#e9edef] overflow-hidden flex flex-col max-h-[92vh] sm:max-h-[85vh] my-auto animate-in fade-in zoom-in-95 duration-150 shrink-0"
+        className="bg-white dark:bg-[#111b21] rounded-2xl sm:rounded-3xl max-w-md w-full shadow-2xl relative border border-[#e9edef] dark:border-[#222e35] overflow-hidden flex flex-col max-h-[92vh] sm:max-h-[85vh] my-auto animate-in fade-in zoom-in-95 duration-150 shrink-0 text-[#111b21] dark:text-[#e9edef]"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -127,7 +127,7 @@ const ProfileModal = ({ isOpen, onClose, user, onUpdateUser, onLogout }) => {
           </div>
 
           {/* Name Field */}
-          <div className="bg-[#f0f2f5] p-3.5 rounded-xl space-y-1">
+          <div className="bg-[#f0f2f5] dark:bg-[#202c33] p-3.5 rounded-xl space-y-1">
             <span className="text-xs text-[#00a884] font-semibold block">Your Name</span>
             {isEditingName ? (
               <div className="flex items-center gap-2">
@@ -137,20 +137,20 @@ const ProfileModal = ({ isOpen, onClose, user, onUpdateUser, onLogout }) => {
                   maxLength={25}
                   onChange={(e) => setName(e.target.value)}
                   autoFocus
-                  className="w-full bg-white px-2 py-1 text-sm border-b-2 border-[#00a884] focus:outline-none rounded"
+                  className="w-full bg-white dark:bg-[#111b21] px-2 py-1 text-sm border-b-2 border-[#00a884] focus:outline-none rounded text-[#111b21] dark:text-[#e9edef]"
                 />
                 <button
                   type="button"
                   onClick={() => saveProfile({ name })}
                   disabled={saving || !name.trim()}
-                  className="p-1 text-[#00a884] hover:bg-black/5 rounded cursor-pointer"
+                  className="p-1 text-[#00a884] hover:bg-black/5 dark:hover:bg-white/5 rounded cursor-pointer"
                 >
                   <Check size={18} />
                 </button>
               </div>
             ) : (
               <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-[#111b21]">{name}</span>
+                <span className="text-sm font-medium text-[#111b21] dark:text-[#e9edef]">{name}</span>
                 <button
                   type="button"
                   onClick={() => setIsEditingName(true)}
@@ -164,7 +164,7 @@ const ProfileModal = ({ isOpen, onClose, user, onUpdateUser, onLogout }) => {
           </div>
 
           {/* About / Status Field */}
-          <div className="bg-[#f0f2f5] p-3.5 rounded-xl space-y-1">
+          <div className="bg-[#f0f2f5] dark:bg-[#202c33] p-3.5 rounded-xl space-y-1">
             <span className="text-xs text-[#00a884] font-semibold block">About</span>
             {isEditingAbout ? (
               <div className="flex items-center gap-2">
@@ -174,20 +174,20 @@ const ProfileModal = ({ isOpen, onClose, user, onUpdateUser, onLogout }) => {
                   maxLength={120}
                   onChange={(e) => setAbout(e.target.value)}
                   autoFocus
-                  className="w-full bg-white px-2 py-1 text-sm border-b-2 border-[#00a884] focus:outline-none rounded"
+                  className="w-full bg-white dark:bg-[#111b21] px-2 py-1 text-sm border-b-2 border-[#00a884] focus:outline-none rounded text-[#111b21] dark:text-[#e9edef]"
                 />
                 <button
                   type="button"
                   onClick={() => saveProfile({ about })}
                   disabled={saving}
-                  className="p-1 text-[#00a884] hover:bg-black/5 rounded cursor-pointer"
+                  className="p-1 text-[#00a884] hover:bg-black/5 dark:hover:bg-white/5 rounded cursor-pointer"
                 >
                   <Check size={18} />
                 </button>
               </div>
             ) : (
               <div className="flex items-center justify-between">
-                <span className="text-sm text-[#54656f]">{about || 'Hey there! I am using WhatsApp.'}</span>
+                <span className="text-sm text-[#54656f] dark:text-[#8696a0]">{about || 'Hey there! I am using WhatsApp.'}</span>
                 <button
                   type="button"
                   onClick={() => setIsEditingAbout(true)}
@@ -200,22 +200,22 @@ const ProfileModal = ({ isOpen, onClose, user, onUpdateUser, onLogout }) => {
           </div>
 
           {/* Contact Details */}
-          <div className="space-y-3 pt-1 border-t border-[#e9edef]">
+          <div className="space-y-3 pt-1 border-t border-[#e9edef] dark:border-[#222e35]">
             {user?.phone && (
-              <div className="flex items-center gap-3 text-sm text-[#54656f]">
+              <div className="flex items-center gap-3 text-sm text-[#54656f] dark:text-[#8696a0]">
                 <Phone size={17} className="text-[#8696a0]" />
                 <div>
                   <span className="text-[11px] text-[#8696a0] block">Phone</span>
-                  <span className="text-[#111b21] font-medium">{user.phone}</span>
+                  <span className="text-[#111b21] dark:text-[#e9edef] font-medium">{user.phone}</span>
                 </div>
               </div>
             )}
             {user?.email && (
-              <div className="flex items-center gap-3 text-sm text-[#54656f]">
+              <div className="flex items-center gap-3 text-sm text-[#54656f] dark:text-[#8696a0]">
                 <Mail size={17} className="text-[#8696a0]" />
                 <div>
                   <span className="text-[11px] text-[#8696a0] block">Email</span>
-                  <span className="text-[#111b21] font-medium">{user.email}</span>
+                  <span className="text-[#111b21] dark:text-[#e9edef] font-medium">{user.email}</span>
                 </div>
               </div>
             )}
@@ -232,7 +232,7 @@ const ProfileModal = ({ isOpen, onClose, user, onUpdateUser, onLogout }) => {
               onClose();
               if (onLogout) onLogout();
             }}
-            className="w-full mt-2 py-2.5 bg-red-50 hover:bg-red-100 text-red-600 font-medium rounded-xl text-sm transition-colors flex items-center justify-center gap-2 cursor-pointer"
+            className="w-full mt-2 py-2.5 bg-red-50 dark:bg-red-950/30 hover:bg-red-100 dark:hover:bg-red-900/40 text-red-600 dark:text-red-400 font-medium rounded-xl text-sm transition-colors flex items-center justify-center gap-2 cursor-pointer"
           >
             <LogOut size={16} />
             Log out

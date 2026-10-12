@@ -37,10 +37,10 @@ const userPayload = (user) => ({
 
 // ─── Shared OTP issue/verify helpers ────────────────────────────────────────
 const issueOtp = async (identifier) => {
-  const existing = await Otp.findOne({ identifier });
-  if (existing && Date.now() - existing.createdAt.getTime() < RESEND_COOLDOWN_MS) {
+  const existing = await Otp.findOne({ identifier }).select('createdAt').lean();
+  if (existing && Date.now() - new Date(existing.createdAt).getTime() < RESEND_COOLDOWN_MS) {
     const waitSec = Math.ceil(
-      (RESEND_COOLDOWN_MS - (Date.now() - existing.createdAt.getTime())) / 1000
+      (RESEND_COOLDOWN_MS - (Date.now() - new Date(existing.createdAt).getTime())) / 1000
     );
     const err = new Error(`Please wait ${waitSec}s before requesting a new code.`);
     err.code = 'COOLDOWN';
@@ -99,10 +99,14 @@ export const sendPhoneOtp = async (req, res) => {
     }
 
     const otp = await issueOtp(`phone:${phone}`);
-    await sendOtpSms(phone, otp);
+    const smsResult = await sendOtpSms(phone, otp);
 
-    // No `otp` field in the response — this is the actual fix for the bypass bug.
-    return res.status(200).json({ success: true, message: 'OTP sent successfully.', phone });
+    return res.status(200).json({
+      success: true,
+      message: 'OTP sent successfully.',
+      phone,
+      ...(smsResult?.devMode ? { devMode: true } : {}),
+    });
   } catch (err) {
     const status = err.code === 'COOLDOWN' ? 429 : 500;
     console.error('sendPhoneOtp error:', err.message);
@@ -166,9 +170,14 @@ export const sendEmailOtp = async (req, res) => {
     }
 
     const otp = await issueOtp(`email:${email}`);
-    await sendOtpEmail(email, otp);
+    const emailResult = await sendOtpEmail(email, otp);
 
-    return res.status(200).json({ success: true, message: 'OTP sent to email.', email });
+    return res.status(200).json({
+      success: true,
+      message: 'OTP sent successfully.',
+      email,
+      ...(emailResult?.devMode ? { devMode: true, devNotice: emailResult.message } : {}),
+    });
   } catch (err) {
     const status = err.code === 'COOLDOWN' ? 429 : 500;
     console.error('sendEmailOtp error:', err.message);

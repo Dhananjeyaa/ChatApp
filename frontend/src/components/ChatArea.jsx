@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback, memo } from 'react';
 import EmojiPicker from 'emoji-picker-react';
 import {
   Search,
@@ -7,7 +7,6 @@ import {
   Plus,
   SendHorizontal,
   Mic,
-  CheckCheck,
   Image,
   FileText,
   Camera,
@@ -19,15 +18,14 @@ import {
   Trash2,
   Play,
   Pause,
-  Star,
   Users,
-  Phone,
-  Video,
+  AlertCircle,
 } from 'lucide-react';
 import { useChat } from '../context/ChatContext';
 import { useAuth } from '../context/AuthContext';
 import Avatar from './Avatar';
-import CallModal from './CallModal';
+import MessageItem from './MessageItem';
+import DeleteMessageModal from './DeleteMessageModal';
 
 // ─── Formatters ───────────────────────────────────────────────────────────────
 const formatTime = (d) => {
@@ -76,73 +74,40 @@ const formatLastSeenHeader = (d) => {
   return `last seen ${date.toLocaleDateString([], { day: '2-digit', month: '2-digit' })} at ${timeStr}`;
 };
 
-// Helper to generate playable synthetic voice audio note (audio/wav base64) when microphone is unavailable
-const generateSyntheticVoiceAudio = (durationSeconds = 3) => {
-  return new Promise((resolve) => {
-    try {
-      const duration = Math.max(1, Math.min(60, Number(durationSeconds) || 3));
-      const sampleRate = 8000;
-      const numSamples = Math.floor(sampleRate * duration);
-      const buffer = new ArrayBuffer(44 + numSamples);
-      const view = new DataView(buffer);
-
-      const writeString = (offset, str) => {
-        for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
-      };
-
-      writeString(0, 'RIFF');
-      view.setUint32(4, 36 + numSamples, true);
-      writeString(8, 'WAVE');
-      writeString(12, 'fmt ');
-      view.setUint32(16, 16, true);
-      view.setUint16(20, 1, true); // PCM
-      view.setUint16(22, 1, true); // Mono
-      view.setUint32(24, sampleRate, true);
-      view.setUint32(28, sampleRate, true);
-      view.setUint16(32, 1, true);
-      view.setUint16(34, 8, true); // 8-bit
-      writeString(36, 'data');
-      view.setUint32(40, numSamples, true);
-
-      // Generate voice harmonic frequencies with envelope
-      for (let i = 0; i < numSamples; i++) {
-        const t = i / sampleRate;
-        const envelope = Math.sin((Math.PI * i) / numSamples); // fade in / out
-        const freq = 420 + 60 * Math.sin(2 * Math.PI * 1.5 * t);
-        const sample = Math.sin(2 * Math.PI * freq * t) * envelope * 0.45;
-        view.setUint8(44 + i, Math.floor((sample + 1) * 127.5));
-      }
-
-      const blob = new Blob([buffer], { type: 'audio/wav' });
-      const reader = new FileReader();
-      reader.onloadend = () => resolve(reader.result);
-      reader.readAsDataURL(blob);
-    } catch {
-      resolve('');
-    }
-  });
-};
-
 // ─── Audio Note Player Component ──────────────────────────────────────────────
-const VoiceNotePlayer = ({ mediaUrl, duration = 0, isMine }) => {
+const VoiceNotePlayer = memo(({ mediaUrl, duration = 0, isMine }) => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
   const audioRef = useRef(null);
   const instanceIdRef = useRef(Math.random().toString(36).substring(2, 9));
 
+  // Robust URL resolution: cleanly handles base64, blob, HTTP(S), and relative server paths
   const resolvedSrc = useMemo(() => {
-    if (!mediaUrl) return '';
-    if (
-      mediaUrl.startsWith('data:') ||
-      mediaUrl.startsWith('blob:') ||
-      mediaUrl.startsWith('http://') ||
-      mediaUrl.startsWith('https://')
-    ) {
-      return mediaUrl;
+    if (!mediaUrl || typeof mediaUrl !== 'string') return '';
+    const cleanUrl = mediaUrl.trim();
+    if (!cleanUrl) return '';
+
+    // If data: or blob: directly
+    if (cleanUrl.startsWith('data:') || cleanUrl.startsWith('blob:')) {
+      return cleanUrl;
     }
-    const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000';
-    return `${baseUrl}${mediaUrl.startsWith('/') ? '' : '/'}${mediaUrl}`;
+
+    // Recover if data:audio was accidentally appended to a base URL (e.g. http://localhost:5000/data:audio/...)
+    const dataAudioIdx = cleanUrl.indexOf('data:audio');
+    if (dataAudioIdx !== -1) {
+      return cleanUrl.slice(dataAudioIdx);
+    }
+
+    // Full absolute URL
+    if (/^https?:\/\//i.test(cleanUrl)) {
+      return cleanUrl;
+    }
+
+    // Clean relative path from backend media directory
+    const baseUrl = (import.meta.env.VITE_API_URL || 'http://localhost:5000').replace(/\/+$/, '');
+    const cleanPath = cleanUrl.startsWith('/') ? cleanUrl : `/${cleanUrl}`;
+    return `${baseUrl}${cleanPath}`;
   }, [mediaUrl]);
 
   const parsedDuration = Number(duration);
@@ -165,7 +130,7 @@ const VoiceNotePlayer = ({ mediaUrl, duration = 0, isMine }) => {
     return () => window.removeEventListener('chatapp-audio-play', handleGlobalPause);
   }, []);
 
-  // Re-sync listeners whenever the src changes
+  // Sync event listeners whenever the src changes
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
@@ -178,7 +143,6 @@ const VoiceNotePlayer = ({ mediaUrl, duration = 0, isMine }) => {
       if (Number.isFinite(audio.duration) && audio.duration > 0) {
         setAudioDuration(audio.duration);
       } else if (audio.duration === Infinity) {
-        // Fix for Chromium WebM duration reporting Infinity
         audio.currentTime = 1e101;
         audio.ontimeupdate = () => {
           audio.ontimeupdate = null;
@@ -191,9 +155,10 @@ const VoiceNotePlayer = ({ mediaUrl, duration = 0, isMine }) => {
     };
 
     const handleTimeUpdate = () => {
-      const dur = (Number.isFinite(audio.duration) && audio.duration > 0)
-        ? audio.duration
-        : (audioDuration || fallbackDuration || 1);
+      const dur =
+        Number.isFinite(audio.duration) && audio.duration > 0
+          ? audio.duration
+          : audioDuration || fallbackDuration || 1;
       if (dur > 0) {
         setProgress(Math.min(100, (audio.currentTime / dur) * 100));
       }
@@ -218,6 +183,7 @@ const VoiceNotePlayer = ({ mediaUrl, duration = 0, isMine }) => {
     audio.addEventListener('pause', handlePause);
 
     return () => {
+      audio.pause();
       audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
       audio.removeEventListener('durationchange', handleLoadedMetadata);
       audio.removeEventListener('timeupdate', handleTimeUpdate);
@@ -249,9 +215,10 @@ const VoiceNotePlayer = ({ mediaUrl, duration = 0, isMine }) => {
     const rect = e.currentTarget.getBoundingClientRect();
     const clickX = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
     const ratio = clickX / rect.width;
-    const dur = (Number.isFinite(audio.duration) && audio.duration > 0)
-      ? audio.duration
-      : (audioDuration || fallbackDuration || 1);
+    const dur =
+      Number.isFinite(audio.duration) && audio.duration > 0
+        ? audio.duration
+        : audioDuration || fallbackDuration || 1;
     const targetTime = ratio * dur;
     audio.currentTime = targetTime;
     setCurrentTime(targetTime);
@@ -301,7 +268,7 @@ const VoiceNotePlayer = ({ mediaUrl, duration = 0, isMine }) => {
           })}
         </div>
 
-        <div className="flex justify-between items-center text-[10px] text-[#667781]">
+        <div className="flex justify-between items-center text-[10px] text-[#667781] dark:text-[#8696a0]">
           <span>{isPlaying ? formatAudioTime(currentTime) : formatAudioTime(displayDuration)}</span>
           <span className="flex items-center gap-1">
             <Mic size={11} className="text-[#00a884]" />
@@ -311,17 +278,24 @@ const VoiceNotePlayer = ({ mediaUrl, duration = 0, isMine }) => {
       </div>
     </div>
   );
-};
+});
 
-// ─── ChatArea Component ────────────────────────────────────────────────────────
-const ChatArea = () => {
+VoiceNotePlayer.displayName = 'VoiceNotePlayer';
+
+// ─── ChatArea Component ───────────────────────────────────────────────────────
+const ChatArea = memo(() => {
   const {
     selectedUser,
     setSelectedUser,
     messages,
     sendMessage,
     toggleStarMessage,
+    deleteMessageForMe,
+    deleteMessageForEveryone,
     loadingMessages,
+    loadingOlderMessages,
+    hasMoreMessages,
+    loadOlderMessages,
     typingUser,
     onlineUsers = [],
     userLastSeenMap,
@@ -333,18 +307,24 @@ const ChatArea = () => {
   const [text, setText] = useState('');
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
   const [attachmentOpen, setAttachmentOpen] = useState(false);
+  const [selectedFile, setSelectedFile] = useState(null);
+  const photoInputRef = useRef(null);
+  const cameraInputRef = useRef(null);
+  const docInputRef = useRef(null);
 
   // Search in chat state
   const [searchBarOpen, setSearchBarOpen] = useState(false);
   const [chatSearchQuery, setChatSearchQuery] = useState('');
   const [currentMatchIdx, setCurrentMatchIdx] = useState(0);
 
-  // Call modal state
-  const [callState, setCallState] = useState({ isOpen: false, type: 'voice' });
+  // 3-Way Message Deletion state
+  const [deleteModalMsg, setDeleteModalMsg] = useState(null);
+  const [isDeletingMessage, setIsDeletingMessage] = useState(false);
 
   // Audio recording state
   const [isRecording, setIsRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const [micNotice, setMicNotice] = useState('');
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const recordingTimerRef = useRef(null);
@@ -359,16 +339,18 @@ const ChatArea = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, typingUser]);
 
-  // Close popovers and reset search on user change
+  // Close popovers and reset search on active user change
   useEffect(() => {
     setEmojiPickerOpen(false);
     setAttachmentOpen(false);
+    setSelectedFile(null);
     setSearchBarOpen(false);
     setChatSearchQuery('');
+    setMicNotice('');
     cancelRecording();
   }, [selectedUser]);
 
-  // Real-time matched message indices
+  // Real-time matched message indices for in-chat search
   const matchingMessageIds = useMemo(() => {
     if (!chatSearchQuery.trim()) return [];
     const q = chatSearchQuery.toLowerCase();
@@ -401,42 +383,81 @@ const ChatArea = () => {
     searchMatchRefs.current[targetId]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   };
 
-  // ─── Audio Recording (Voice Notes) ──────────────────────────────────────────
-  const startRecording = async () => {
+  // ─── 3-Way Message Deletion Actions ─────────────────────────────────────────
+  const handleRequestDelete = useCallback((msg) => {
+    setDeleteModalMsg(msg);
+  }, []);
+
+  const handleDeleteForMe = useCallback(async () => {
+    if (!deleteModalMsg?._id || isDeletingMessage) return;
+    setIsDeletingMessage(true);
     try {
+      await deleteMessageForMe(deleteModalMsg._id);
+      setDeleteModalMsg(null);
+    } catch (err) {
+      console.error('Delete for me error:', err.message);
+    } finally {
+      setIsDeletingMessage(false);
+    }
+  }, [deleteModalMsg, isDeletingMessage, deleteMessageForMe]);
+
+  const handleDeleteForEveryone = useCallback(async () => {
+    if (!deleteModalMsg?._id || isDeletingMessage) return;
+    setIsDeletingMessage(true);
+    try {
+      await deleteMessageForEveryone(deleteModalMsg._id);
+      setDeleteModalMsg(null);
+    } catch (err) {
+      console.error('Delete for everyone error:', err.message);
+    } finally {
+      setIsDeletingMessage(false);
+    }
+  }, [deleteModalMsg, isDeletingMessage, deleteMessageForEveryone]);
+
+  // ─── Audio Recording (Voice Notes with Clean Permission Notice) ─────────────
+  const startRecording = async () => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setMicNotice('Microphone recording is not supported in this browser.');
+      setTimeout(() => setMicNotice(''), 4000);
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioChunksRef.current = [];
       setRecordingSeconds(0);
       setIsRecording(true);
-      audioChunksRef.current = [];
+      setMicNotice('');
 
       recordingTimerRef.current = setInterval(() => {
         setRecordingSeconds((prev) => prev + 1);
       }, 1000);
 
-      if (navigator.mediaDevices?.getUserMedia) {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        let options;
-        if (typeof MediaRecorder.isTypeSupported === 'function') {
-          if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
-            options = { mimeType: 'audio/webm;codecs=opus' };
-          } else if (MediaRecorder.isTypeSupported('audio/webm')) {
-            options = { mimeType: 'audio/webm' };
-          } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
-            options = { mimeType: 'audio/mp4' };
-          }
+      let options;
+      if (typeof MediaRecorder.isTypeSupported === 'function') {
+        if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+          options = { mimeType: 'audio/webm;codecs=opus' };
+        } else if (MediaRecorder.isTypeSupported('audio/webm')) {
+          options = { mimeType: 'audio/webm' };
+        } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+          options = { mimeType: 'audio/mp4' };
         }
-
-        const mediaRecorder = options ? new MediaRecorder(stream, options) : new MediaRecorder(stream);
-        mediaRecorderRef.current = mediaRecorder;
-
-        mediaRecorder.ondataavailable = (e) => {
-          if (e.data && e.data.size > 0) audioChunksRef.current.push(e.data);
-        };
-
-        // Collect audio data continuously in 200ms slices
-        mediaRecorder.start(200);
       }
+
+      const mediaRecorder = options ? new MediaRecorder(stream, options) : new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+
+      mediaRecorder.start(200);
     } catch (err) {
-      console.warn('Microphone permission / access issue, using simulated voice recording:', err.message);
+      console.warn('Microphone permission access failed:', err.message);
+      setIsRecording(false);
+      setRecordingSeconds(0);
+      setMicNotice('Microphone permission was denied. Please allow microphone access in browser settings.');
+      setTimeout(() => setMicNotice(''), 4500);
     }
   };
 
@@ -457,10 +478,8 @@ const ChatArea = () => {
 
     const recorder = mediaRecorderRef.current;
     if (recorder && recorder.state !== 'inactive') {
-      recorder.onstop = async () => {
-        // Stop mic tracks after all data is collected
+      recorder.onstop = () => {
         recorder.stream?.getTracks().forEach((track) => track.stop());
-
         const chunks = audioChunksRef.current;
         audioChunksRef.current = [];
 
@@ -477,33 +496,15 @@ const ChatArea = () => {
             });
           };
           reader.readAsDataURL(blob);
-        } else {
-          const syntheticUrl = await generateSyntheticVoiceAudio(duration);
-          sendMessage(selectedUser._id, '🎤 Voice message', {
-            messageType: 'audio',
-            mediaUrl: syntheticUrl,
-            mediaDuration: duration,
-            isGroup: selectedUser.isGroup,
-          });
         }
       };
 
       try {
         if (recorder.state === 'recording') recorder.requestData();
       } catch {
-        // Ignore if requestData not supported in current state
+        // Ignore requestData error if already completed
       }
       recorder.stop();
-    } else {
-      // Fallback simulated voice note with valid playable audio
-      generateSyntheticVoiceAudio(duration).then((syntheticUrl) => {
-        sendMessage(selectedUser._id, '🎤 Voice message', {
-          messageType: 'audio',
-          mediaUrl: syntheticUrl,
-          mediaDuration: duration,
-          isGroup: selectedUser.isGroup,
-        });
-      });
     }
 
     setIsRecording(false);
@@ -514,6 +515,29 @@ const ChatArea = () => {
     const mins = Math.floor(sec / 60);
     const remaining = sec % 60;
     return `${mins}:${remaining < 10 ? '0' : ''}${remaining}`;
+  };
+
+  // ─── File Attachment Handlers ─────────────────────────────────────────────
+  const handleFileSelect = (e, type = 'file') => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      setSelectedFile({
+        file,
+        previewUrl: reader.result,
+        type: file.type.startsWith('image/') ? 'image' : type,
+        name: file.name,
+      });
+    };
+    reader.readAsDataURL(file);
+    setAttachmentOpen(false);
+    e.target.value = '';
+  };
+
+  const cancelSelectedFile = () => {
+    setSelectedFile(null);
   };
 
   // ─── Input Handlers ─────────────────────────────────────────────────────────
@@ -534,10 +558,21 @@ const ChatArea = () => {
   };
 
   const handleSend = () => {
-    if (!text.trim() || !selectedUser) return;
+    if ((!text.trim() && !selectedFile) || !selectedUser) return;
     if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
     sendStopTypingStatus(selectedUser._id);
-    sendMessage(selectedUser._id, text.trim(), { isGroup: selectedUser.isGroup });
+
+    if (selectedFile) {
+      sendMessage(selectedUser._id, text.trim() || selectedFile.name, {
+        isGroup: selectedUser.isGroup,
+        messageType: selectedFile.type,
+        mediaUrl: selectedFile.previewUrl,
+      });
+      setSelectedFile(null);
+    } else {
+      sendMessage(selectedUser._id, text.trim(), { isGroup: selectedUser.isGroup });
+    }
+
     setText('');
     setEmojiPickerOpen(false);
     setAttachmentOpen(false);
@@ -548,38 +583,19 @@ const ChatArea = () => {
     inputRef.current?.focus();
   };
 
-  // ─── Text Highlighter for Chat Search ───────────────────────────────────────
-  const renderMessageContent = (messageText) => {
-    if (!chatSearchQuery.trim()) return messageText;
-    const query = chatSearchQuery.trim();
-    const parts = messageText.split(new RegExp(`(${query})`, 'gi'));
-    return parts.map((part, index) =>
-      part.toLowerCase() === query.toLowerCase() ? (
-        <mark
-          key={index}
-          className="bg-[#ffeaa7] text-[#111b21] font-semibold px-0.5 rounded shadow-xs"
-        >
-          {part}
-        </mark>
-      ) : (
-        part
-      )
-    );
-  };
-
   // ─── Welcome Screen ─────────────────────────────────────────────────────────
   if (!selectedUser) {
     return (
-      <div className="flex-1 h-full bg-[#f0f2f5] flex flex-col items-center justify-center border-b-[6px] border-[#00a884] select-none px-6">
+      <div className="flex-1 h-full bg-[#f0f2f5] dark:bg-[#111b21] flex flex-col items-center justify-center border-b-[6px] border-[#00a884] select-none px-6 transition-colors">
         <div className="max-w-[460px] text-center flex flex-col items-center">
-          <div className="w-24 h-24 rounded-full bg-[#dfe5e7] flex items-center justify-center mb-8 shadow-inner">
-            <MessageSquare size={46} className="text-[#54656f]" />
+          <div className="w-24 h-24 rounded-full bg-[#dfe5e7] dark:bg-[#202c33] flex items-center justify-center mb-8 shadow-inner">
+            <MessageSquare size={46} className="text-[#54656f] dark:text-[#aebac1]" />
           </div>
-          <h1 className="text-3xl font-light text-[#41525d] mb-3">ChatApp Web</h1>
-          <p className="text-sm text-[#667781] leading-relaxed mb-8">
-            Send and receive messages without keeping your phone online.
+          <h1 className="text-3xl font-light text-[#41525d] dark:text-[#e9edef] mb-3">ChatApp Web</h1>
+          <p className="text-sm text-[#667781] dark:text-[#8696a0] leading-relaxed mb-8">
+            Send and receive messages in real time.
             <br />
-            Use ChatApp on up to 4 linked devices at the same time.
+            Select a conversation from the sidebar to start chatting.
           </p>
           <div className="flex items-center gap-1.5 text-xs text-[#8696a0]">
             <Lock size={13} />
@@ -597,23 +613,22 @@ const ChatArea = () => {
   let lastDateLabel = '';
 
   return (
-    <div className="flex-1 h-full flex flex-col bg-[#efeae2] relative overflow-hidden">
-
+    <div className="flex-1 h-full flex flex-col bg-[#efeae2] dark:bg-[#0b141a] relative overflow-hidden transition-colors">
       {/* ── 1. Header Bar ── */}
-      <div className="h-[60px] bg-[#f0f2f5] px-3 sm:px-4 py-2.5 border-b border-[#e9edef] flex items-center justify-between shrink-0 z-20">
+      <div className="h-[60px] bg-[#f0f2f5] dark:bg-[#202c33] px-3 sm:px-4 py-2.5 border-b border-[#e9edef] dark:border-[#222e35] flex items-center justify-between shrink-0 z-20 transition-colors">
         <div className="flex items-center gap-2 min-w-0 flex-1 mr-2">
-          {/* Mobile: smooth back to sidebar */}
+          {/* Mobile: back to sidebar */}
           <button
             type="button"
             onClick={() => setSelectedUser(null)}
-            className="md:hidden flex items-center justify-center w-9 h-9 -ml-1 mr-0.5 rounded-full hover:bg-black/10 active:bg-black/15 active:scale-95 transition-all text-[#54656f] hover:text-[#111b21] cursor-pointer shrink-0"
+            className="md:hidden flex items-center justify-center w-9 h-9 -ml-1 mr-0.5 rounded-full hover:bg-black/10 dark:hover:bg-white/10 active:scale-95 transition-all text-[#54656f] dark:text-[#aebac1] cursor-pointer shrink-0"
             title="Back to chats"
             aria-label="Back to chats"
           >
             <ArrowLeft size={21} className="stroke-[2.2]" />
           </button>
 
-          {/* Avatar with correctly positioned bottom-right online dot */}
+          {/* Avatar */}
           {selectedUser.isGroup ? (
             <div className="w-10 h-10 rounded-full bg-[#00a884]/15 flex items-center justify-center text-[#00a884] shrink-0 font-bold">
               <Users size={20} />
@@ -628,10 +643,10 @@ const ChatArea = () => {
           )}
 
           <div className="min-w-0 flex-1">
-            <h2 className="text-sm font-semibold text-[#111b21] leading-tight truncate flex items-center gap-1.5">
+            <h2 className="text-sm font-semibold text-[#111b21] dark:text-[#e9edef] leading-tight truncate flex items-center gap-1.5">
               <span className="truncate">{selectedUser.name}</span>
               {selectedUser.isGroup && (
-                <span className="text-[10px] text-[#00a884] bg-[#e7f7f3] px-1.5 py-0.5 rounded font-medium shrink-0">
+                <span className="text-[10px] text-[#00a884] bg-[#e7f7f3] dark:bg-[#00a884]/20 px-1.5 py-0.5 rounded font-medium shrink-0">
                   Group
                 </span>
               )}
@@ -640,46 +655,25 @@ const ChatArea = () => {
               {isTyping ? (
                 <span className="text-[#00a884] font-medium animate-pulse">typing...</span>
               ) : selectedUser.isGroup ? (
-                <span className="text-[#667781] truncate block">
+                <span className="text-[#667781] dark:text-[#8696a0] truncate block">
                   {selectedUser.members?.map((m) => m.name || 'Member').join(', ')}
                 </span>
               ) : isOnline ? (
                 <span className="text-[#00a884] font-medium">online</span>
               ) : (
-                <span className="text-[#667781]">{formatLastSeenHeader(lastSeen)}</span>
+                <span className="text-[#667781] dark:text-[#8696a0]">{formatLastSeenHeader(lastSeen)}</span>
               )}
             </p>
           </div>
         </div>
 
         {/* Action Header Icons */}
-        <div className="flex items-center gap-1 text-[#54656f]">
-          {!selectedUser.isGroup && (
-            <>
-              <button
-                type="button"
-                onClick={() => setCallState({ isOpen: true, type: 'video' })}
-                className="p-2 rounded-full hover:bg-black/5 hover:text-[#00a884] transition-colors cursor-pointer text-[#54656f]"
-                title="Video call"
-              >
-                <Video size={19} />
-              </button>
-              <button
-                type="button"
-                onClick={() => setCallState({ isOpen: true, type: 'voice' })}
-                className="p-2 rounded-full hover:bg-black/5 hover:text-[#00a884] transition-colors cursor-pointer text-[#54656f]"
-                title="Voice call"
-              >
-                <Phone size={18} />
-              </button>
-            </>
-          )}
-
+        <div className="flex items-center gap-1 text-[#54656f] dark:text-[#aebac1]">
           <button
             type="button"
             onClick={() => setSearchBarOpen((p) => !p)}
             className={`p-2 rounded-full transition-colors cursor-pointer ${
-              searchBarOpen ? 'bg-black/10 text-[#00a884]' : 'hover:bg-black/5'
+              searchBarOpen ? 'bg-black/10 dark:bg-white/10 text-[#00a884]' : 'hover:bg-black/5 dark:hover:bg-white/5'
             }`}
             title="Search in conversation"
           >
@@ -688,31 +682,31 @@ const ChatArea = () => {
         </div>
       </div>
 
-      {/* ── Sub-header Search Bar (Toggled on Search icon click) ── */}
+      {/* ── Sub-header Search Bar ── */}
       {searchBarOpen && (
-        <div className="bg-[#f0f2f5] px-4 py-2 border-b border-[#e9edef] flex items-center justify-between gap-3 shrink-0 z-20 shadow-xs animate-fade-in">
-          <div className="flex-1 bg-white rounded-xl px-3 py-1.5 flex items-center gap-2 border border-[#e9edef] focus-within:shadow-[0_0_0_1px_#00a884]">
-            <Search size={16} className="text-[#54656f] shrink-0" />
+        <div className="bg-[#f0f2f5] dark:bg-[#202c33] px-4 py-2 border-b border-[#e9edef] dark:border-[#222e35] flex items-center justify-between gap-3 shrink-0 z-20 shadow-xs animate-in fade-in duration-150">
+          <div className="flex-1 bg-white dark:bg-[#111b21] rounded-xl px-3 py-1.5 flex items-center gap-2 border border-[#e9edef] dark:border-[#222e35] focus-within:shadow-[0_0_0_1px_#00a884]">
+            <Search size={16} className="text-[#54656f] dark:text-[#8696a0] shrink-0" />
             <input
               type="text"
               value={chatSearchQuery}
               onChange={(e) => setChatSearchQuery(e.target.value)}
               placeholder="Search in this chat..."
               autoFocus
-              className="w-full text-xs text-[#111b21] placeholder-[#8696a0] focus:outline-none bg-transparent"
+              className="w-full text-xs text-[#111b21] dark:text-[#e9edef] placeholder-[#8696a0] focus:outline-none bg-transparent"
             />
             {chatSearchQuery && (
               <button
                 type="button"
                 onClick={() => setChatSearchQuery('')}
-                className="text-[#8696a0] hover:text-[#111b21]"
+                className="text-[#8696a0] hover:text-[#111b21] dark:hover:text-white"
               >
                 <X size={14} />
               </button>
             )}
           </div>
 
-          <div className="flex items-center gap-2 text-xs text-[#54656f]">
+          <div className="flex items-center gap-2 text-xs text-[#54656f] dark:text-[#8696a0]">
             <span className="text-[11px] font-medium shrink-0">
               {matchingMessageIds.length > 0
                 ? `${currentMatchIdx + 1} of ${matchingMessageIds.length}`
@@ -725,7 +719,7 @@ const ChatArea = () => {
               type="button"
               onClick={handlePrevMatch}
               disabled={matchingMessageIds.length === 0}
-              className="p-1 hover:bg-black/5 disabled:opacity-30 rounded-md transition-colors"
+              className="p-1 hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-30 rounded-md transition-colors"
               title="Previous match"
             >
               <ChevronUp size={16} />
@@ -734,7 +728,7 @@ const ChatArea = () => {
               type="button"
               onClick={handleNextMatch}
               disabled={matchingMessageIds.length === 0}
-              className="p-1 hover:bg-black/5 disabled:opacity-30 rounded-md transition-colors"
+              className="p-1 hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-30 rounded-md transition-colors"
               title="Next match"
             >
               <ChevronDown size={16} />
@@ -745,7 +739,7 @@ const ChatArea = () => {
                 setSearchBarOpen(false);
                 setChatSearchQuery('');
               }}
-              className="p-1 hover:bg-black/5 rounded-md transition-colors ml-1"
+              className="p-1 hover:bg-black/5 dark:hover:bg-white/5 rounded-md transition-colors ml-1"
               title="Close search"
             >
               <X size={16} />
@@ -754,20 +748,28 @@ const ChatArea = () => {
         </div>
       )}
 
-      {/* ── 2. Message Window (Doodle Background + Explicit Z-10 on Content) ── */}
-      <div className="flex-1 overflow-y-auto px-2.5 sm:px-8 md:px-14 py-3 sm:py-4 space-y-1 whatsapp-doodle-bg relative overflow-hidden">
-        {/* Underlying subtle doodle layer with opacity-35 and explicit z-0 */}
-        <div
-          className="absolute inset-0 pointer-events-none z-0 opacity-35 select-none"
-          style={{
-            backgroundImage: `url("data:image/svg+xml,%3Csvg width='120' height='120' viewBox='0 0 120 120' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath opacity='0.08' fill-rule='evenodd' clip-rule='evenodd' d='M28 14C23.5817 14 20 17.5817 20 22V32C20 36.4183 23.5817 40 28 40H30V46L36 40H44C48.4183 40 52 36.4183 52 32V22C52 17.5817 48.4183 14 44 14H28ZM86 74C81.5817 74 78 77.5817 78 82V92C78 96.4183 81.5817 100 86 100H94L100 106V100H102C106.418 100 110 96.4183 110 92V82C110 77.5817 106.418 74 102 74H86ZM18 84C18 79.5817 21.5817 76 26 76C30.4183 76 34 79.5817 34 84C34 88.4183 30.4183 92 26 92C21.5817 92 18 88.4183 18 84ZM88 28C88 23.5817 91.5817 20 96 20C100.418 20 104 23.5817 104 28C104 32.4183 100.418 36 96 36C91.5817 36 88 32.4183 88 28ZM62 50C57.5817 50 54 53.5817 54 58C54 62.4183 57.5817 66 62 66C66.4183 66 70 62.4183 70 58C70 53.5817 66.4183 50 62 50Z' fill='%23000000'/%3E%3C/svg%3E")`,
-            backgroundSize: '120px 120px',
-          }}
-        />
+      {/* ── Mic Permission Notice Banner ── */}
+      {micNotice && (
+        <div className="bg-amber-500/10 dark:bg-amber-500/20 border-b border-amber-500/30 px-4 py-2 flex items-center justify-between text-xs text-amber-800 dark:text-amber-300 z-20 animate-in fade-in">
+          <div className="flex items-center gap-2">
+            <AlertCircle size={16} className="shrink-0 text-amber-600 dark:text-amber-400" />
+            <span>{micNotice}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setMicNotice('')}
+            className="p-1 hover:bg-amber-500/10 rounded-full"
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
 
-        {/* End to End Encryption Notice with explicit relative z-10 */}
+      {/* ── 2. Message Window ── */}
+      <div className="flex-1 overflow-y-auto overscroll-contain px-2.5 sm:px-8 md:px-14 py-3 sm:py-4 space-y-1 whatsapp-doodle-bg relative">
+        {/* End to End Encryption Notice */}
         <div className="flex justify-center my-3 select-none relative z-10">
-          <div className="bg-[#ffeecd] border border-[#ffd279]/30 text-[#54656f] text-[11.5px] px-4 py-1.5 rounded-lg shadow-xs flex items-center gap-1.5 text-center max-w-[480px]">
+          <div className="bg-[#ffeecd] dark:bg-[#182229] border border-[#ffd279]/30 dark:border-[#222e35] text-[#54656f] dark:text-[#8696a0] text-[11.5px] px-4 py-1.5 rounded-lg shadow-xs flex items-center gap-1.5 text-center max-w-[480px]">
             <Lock size={12} className="shrink-0 text-[#8696a0]" />
             <span>Messages are end-to-end encrypted. No one outside this chat can read them.</span>
           </div>
@@ -780,124 +782,83 @@ const ChatArea = () => {
           </div>
         ) : messages.length === 0 ? (
           <div className="flex justify-center py-16 relative z-10">
-            <span className="bg-white/90 text-[#54656f] text-xs px-4 py-2 rounded-lg shadow-xs">
+            <span className="bg-white/90 dark:bg-[#202c33] text-[#54656f] dark:text-[#8696a0] text-xs px-4 py-2 rounded-lg shadow-xs">
               No messages yet. Say hello to {selectedUser.name}! 👋
             </span>
           </div>
         ) : (
-          messages.map((msg, i) => {
-            const isMine =
-              msg.sender === user?._id ||
-              msg.sender?._id === user?._id ||
-              msg.sender?.toString() === user?._id?.toString();
-
-            const isStarred = (msg.starredBy || []).some(
-              (id) => (typeof id === 'object' && id._id ? id._id.toString() : id.toString()) === user?._id?.toString()
-            );
-
-            const msgDate = msg.createdAt || msg.timestamp;
-            const dateBadge = formatDateBadge(msgDate);
-            let showBadge = false;
-            if (dateBadge && dateBadge !== lastDateLabel) {
-              showBadge = true;
-              lastDateLabel = dateBadge;
-            }
-
-            const prevMsg = messages[i - 1];
-            const isFirstInGroup =
-              !prevMsg ||
-              (prevMsg.sender?._id || prevMsg.sender)?.toString() !== (msg.sender?._id || msg.sender)?.toString() ||
-              showBadge;
-
-            const isMatch = matchingMessageIds[currentMatchIdx] === msg._id;
-
-            return (
-              <div
-                key={msg._id || i}
-                ref={(el) => (searchMatchRefs.current[msg._id] = el)}
-                className="relative z-10"
-              >
-                {/* Date Badge with explicit relative z-10 */}
-                {showBadge && (
-                  <div className="flex justify-center my-3 select-none sticky top-1 z-10">
-                    <span className="bg-white/95 text-[#54656f] text-[11px] font-semibold px-3 py-1.5 rounded-lg shadow-[0_1px_0.5px_rgba(11,20,26,0.13)] uppercase tracking-wider">
-                      {dateBadge}
-                    </span>
-                  </div>
-                )}
-
-                {/* Message Bubble with explicit relative z-10 */}
-                <div
-                  className={`flex ${isMine ? 'justify-end' : 'justify-start'} ${
-                    isFirstInGroup ? 'mt-2' : 'mt-0.5'
-                  } group/bubble`}
+          <>
+            {hasMoreMessages && (
+              <div className="flex justify-center my-2 relative z-10">
+                <button
+                  type="button"
+                  onClick={loadOlderMessages}
+                  disabled={loadingOlderMessages}
+                  className="bg-white/90 dark:bg-[#202c33] hover:bg-white dark:hover:bg-[#2a3942] text-[#00a884] text-xs font-medium px-4 py-1.5 rounded-full shadow-xs border border-[#e9edef] dark:border-[#222e35] transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
                 >
-                  <div
-                    className={`max-w-[88%] sm:max-w-[75%] md:max-w-[65%] px-3 pt-1.5 pb-2 rounded-lg shadow-[0_1px_0.5px_rgba(11,20,26,0.13)] relative text-sm break-words transition-all ${
-                      isMatch ? 'ring-2 ring-[#00a884] ring-offset-1' : ''
-                    } ${
-                      isMine
-                        ? 'whatsapp-bubble-sent rounded-tr-none'
-                        : 'whatsapp-bubble-received rounded-tl-none'
-                    } ${
-                      isFirstInGroup ? (isMine ? 'whatsapp-tail-sent' : 'whatsapp-tail-received') : ''
-                    }`}
-                  >
-                    {/* Sender name for group chats */}
-                    {selectedUser.isGroup && !isMine && isFirstInGroup && (
-                      <span className="text-[11px] font-semibold text-[#00a884] block mb-0.5">
-                        {msg.sender?.name || 'Participant'}
-                      </span>
-                    )}
-
-                    {/* Message Body: Text or Voice Note */}
-                    {msg.messageType === 'audio' ? (
-                      <VoiceNotePlayer
-                        mediaUrl={msg.mediaUrl}
-                        duration={msg.mediaDuration}
-                        isMine={isMine}
-                      />
-                    ) : (
-                      <span className="text-[#111b21] leading-relaxed whitespace-pre-wrap select-text">
-                        {renderMessageContent(msg.message)}
-                      </span>
-                    )}
-
-                    {/* Metadata Footer: Timestamp + Status + Star */}
-                    <div className="inline-flex items-center gap-1 float-right ml-3 mt-1 select-none shrink-0">
-                      {isStarred && (
-                        <Star size={11} className="fill-[#8696a0] text-[#8696a0] shrink-0" />
-                      )}
-
-                      <span className="text-[10px] text-[#667781] leading-none">
-                        {formatTime(msgDate)}
-                      </span>
-
-                      {isMine && (
-                        <CheckCheck
-                          size={15}
-                          className={msg.status === 'read' ? 'text-[#53bdeb]' : 'text-[#8696a0]'}
-                        />
-                      )}
-
-                      {/* Quick Star / Bookmark on Hover */}
-                      <button
-                        type="button"
-                        onClick={() => toggleStarMessage(msg._id)}
-                        title={isStarred ? 'Unstar message' : 'Star message'}
-                        className="opacity-0 group-hover/bubble:opacity-100 hover:text-[#00a884] text-[#8696a0] transition-opacity ml-1"
-                      >
-                        <Star size={12} className={isStarred ? 'fill-[#00a884] text-[#00a884]' : ''} />
-                      </button>
-                    </div>
-                  </div>
-                </div>
+                  {loadingOlderMessages ? (
+                    <>
+                      <div className="w-3 h-3 border-2 border-[#00a884] border-t-transparent rounded-full animate-spin" />
+                      <span>Loading...</span>
+                    </>
+                  ) : (
+                    <span>Load older messages</span>
+                  )}
+                </button>
               </div>
-            );
-          })
+            )}
+            {messages.map((msg, i) => {
+              const isMine =
+                msg.sender === user?._id ||
+                msg.sender?._id === user?._id ||
+                msg.sender?.toString() === user?._id?.toString();
+
+              const isStarred = (msg.starredBy || []).some(
+                (id) =>
+                  (typeof id === 'object' && id._id ? id._id.toString() : id.toString()) ===
+                  user?._id?.toString()
+              );
+
+              const msgDate = msg.createdAt || msg.timestamp;
+              const dateBadge = formatDateBadge(msgDate);
+              let showBadge = false;
+              if (dateBadge && dateBadge !== lastDateLabel) {
+                showBadge = true;
+                lastDateLabel = dateBadge;
+              }
+
+              const prevMsg = messages[i - 1];
+              const isFirstInGroup =
+                !prevMsg ||
+                (prevMsg.sender?._id || prevMsg.sender)?.toString() !==
+                  (msg.sender?._id || msg.sender)?.toString() ||
+                showBadge;
+
+              const isMatch = matchingMessageIds[currentMatchIdx] === msg._id;
+
+              return (
+                <MessageItem
+                  key={msg._id || i}
+                  msg={msg}
+                  isMine={isMine}
+                  isStarred={isStarred}
+                  showBadge={showBadge}
+                  dateBadge={dateBadge}
+                  isFirstInGroup={isFirstInGroup}
+                  isMatch={isMatch}
+                  isGroup={selectedUser.isGroup}
+                  chatSearchQuery={chatSearchQuery}
+                  onToggleStar={toggleStarMessage}
+                  onRequestDelete={handleRequestDelete}
+                  VoicePlayerComponent={VoiceNotePlayer}
+                  measureRef={(el) => (searchMatchRefs.current[msg._id] = el)}
+                />
+              );
+            })}
+          </>
         )}
 
-        {/* Typing Indicator with relative z-10 */}
+        {/* Typing Indicator */}
         {isTyping && (
           <div className="flex justify-start mt-2 relative z-10">
             <div className="whatsapp-bubble-received px-3.5 py-2.5 rounded-lg rounded-tl-none shadow-[0_1px_0.5px_rgba(11,20,26,0.13)] flex items-center gap-1.5">
@@ -912,49 +873,117 @@ const ChatArea = () => {
       </div>
 
       {/* ── 3. Footer Bar & Input / Audio Recording Bar ── */}
-      <div className="bg-[#f0f2f5] px-4 py-2.5 border-t border-[#e9edef] relative shrink-0 z-20">
-
-        {/* Full Emoji Picker Integration */}
+      <div
+        className="bg-[#f0f2f5] dark:bg-[#202c33] px-4 pt-2.5 border-t border-[#e9edef] dark:border-[#222e35] relative shrink-0 z-20 transition-colors"
+        style={{ paddingBottom: 'max(10px, env(safe-area-inset-bottom, 10px))' }}
+      >
+        {/* Emoji Picker Integration — mobile-responsive width & position */}
         {emojiPickerOpen && (
-          <div className="absolute bottom-[65px] left-4 shadow-2xl z-30 rounded-2xl overflow-hidden border border-[#e9edef]">
+          <div
+            className="absolute bottom-[65px] left-0 sm:left-4 shadow-2xl z-30 rounded-none sm:rounded-2xl overflow-hidden border-t sm:border border-[#e9edef] dark:border-[#222e35]"
+            style={{ width: 'min(320px, 100vw)' }}
+          >
             <EmojiPicker
               onEmojiClick={(emojiData) => addEmoji(emojiData.emoji)}
-              width={320}
-              height={400}
+              width="100%"
+              height={Math.min(400, window.innerHeight * 0.5)}
               searchPlaceHolder="Search emoji..."
               lazyLoadEmojis={true}
             />
           </div>
         )}
 
+        {/* Hidden File Inputs */}
+        <input
+          ref={photoInputRef}
+          type="file"
+          accept="image/*,video/*"
+          className="hidden"
+          onChange={(e) => handleFileSelect(e, 'image')}
+        />
+        <input
+          ref={cameraInputRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          className="hidden"
+          onChange={(e) => handleFileSelect(e, 'image')}
+        />
+        <input
+          ref={docInputRef}
+          type="file"
+          accept="*/*"
+          className="hidden"
+          onChange={(e) => handleFileSelect(e, 'file')}
+        />
+
         {/* Attachment Options Popover */}
         {attachmentOpen && (
-          <div className="absolute bottom-[65px] left-14 bg-white p-2 rounded-2xl shadow-2xl border border-[#e9edef] flex flex-col gap-1 w-44 z-30">
-            {[
-              { icon: <Image size={16} className="text-[#007bfc]" />, label: 'Photos & Videos' },
-              { icon: <Camera size={16} className="text-[#d3396d]" />, label: 'Camera' },
-              { icon: <FileText size={16} className="text-[#5f66cd]" />, label: 'Document' },
-            ].map(({ icon, label }) => (
-              <button
-                key={label}
-                type="button"
-                onClick={() => setAttachmentOpen(false)}
-                className="flex items-center gap-3 px-3 py-2 text-xs text-[#111b21] hover:bg-[#f0f2f5] rounded-xl transition-colors text-left"
-              >
-                {icon}
-                {label}
-              </button>
-            ))}
+          <div className="absolute bottom-[65px] left-14 bg-white dark:bg-[#233138] p-2 rounded-2xl shadow-2xl border border-[#e9edef] dark:border-[#222e35] flex flex-col gap-1 w-48 z-30 animate-in fade-in zoom-in-95 duration-100">
+            <button
+              type="button"
+              onClick={() => photoInputRef.current?.click()}
+              className="flex items-center gap-3 px-3 py-2 text-xs text-[#111b21] dark:text-[#e9edef] hover:bg-[#f0f2f5] dark:hover:bg-[#182229] rounded-xl transition-colors text-left cursor-pointer"
+            >
+              <Image size={16} className="text-[#007bfc]" />
+              <span>Photos & Videos</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => cameraInputRef.current?.click()}
+              className="flex items-center gap-3 px-3 py-2 text-xs text-[#111b21] dark:text-[#e9edef] hover:bg-[#f0f2f5] dark:hover:bg-[#182229] rounded-xl transition-colors text-left cursor-pointer"
+            >
+              <Camera size={16} className="text-[#d3396d]" />
+              <span>Camera</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => docInputRef.current?.click()}
+              className="flex items-center gap-3 px-3 py-2 text-xs text-[#111b21] dark:text-[#e9edef] hover:bg-[#f0f2f5] dark:hover:bg-[#182229] rounded-xl transition-colors text-left cursor-pointer"
+            >
+              <FileText size={16} className="text-[#5f66cd]" />
+              <span>Document</span>
+            </button>
           </div>
         )}
 
-        {/* Active Audio Recording State vs Standard Input Bar */}
+        {/* Attachment Preview Banner */}
+        {selectedFile && (
+          <div className="mb-2 p-2 bg-white dark:bg-[#111b21] rounded-xl border border-[#e9edef] dark:border-[#222e35] flex items-center justify-between gap-3 shadow-xs animate-in fade-in">
+            <div className="flex items-center gap-2.5 overflow-hidden">
+              {selectedFile.type === 'image' && selectedFile.previewUrl ? (
+                <img
+                  src={selectedFile.previewUrl}
+                  alt="preview"
+                  className="w-10 h-10 object-cover rounded-lg shrink-0 border border-[#e9edef] dark:border-[#222e35]"
+                />
+              ) : (
+                <div className="w-10 h-10 rounded-lg bg-[#f0f2f5] dark:bg-[#202c33] flex items-center justify-center shrink-0">
+                  <FileText size={20} className="text-[#5f66cd]" />
+                </div>
+              )}
+              <div className="truncate">
+                <p className="text-xs font-medium text-[#111b21] dark:text-[#e9edef] truncate">{selectedFile.name}</p>
+                <p className="text-[10px] text-[#667781] dark:text-[#8696a0]">Ready to send</p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={cancelSelectedFile}
+              className="p-1 hover:bg-[#f0f2f5] dark:hover:bg-[#202c33] rounded-full text-[#667781] dark:text-[#8696a0] hover:text-[#111b21] dark:hover:text-white transition-colors cursor-pointer"
+              title="Remove attachment"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        )}
+
+        {/* Audio Recording State vs Standard Input Bar */}
         {isRecording ? (
-          <div className="flex items-center justify-between gap-3 bg-white px-4 py-2 rounded-2xl border border-[#e9edef] shadow-xs animate-fade-in">
-            {/* Blinking red dot with timer */}
+          <div className="flex items-center justify-between gap-3 bg-white dark:bg-[#111b21] px-4 py-2 rounded-2xl border border-[#e9edef] dark:border-[#222e35] shadow-xs animate-in fade-in">
             <div className="flex items-center gap-2">
               <span className="w-3 h-3 rounded-full bg-red-500 animate-ping" />
-              <span className="text-sm font-mono font-medium text-red-600">
+              <span className="text-sm font-mono font-medium text-red-600 dark:text-red-400">
                 {formatRecordingTime(recordingSeconds)}
               </span>
             </div>
@@ -974,17 +1003,15 @@ const ChatArea = () => {
             </div>
 
             <div className="flex items-center gap-2">
-              {/* Discard / Cancel button */}
               <button
                 type="button"
                 onClick={cancelRecording}
-                className="p-2 text-red-500 hover:bg-red-50 rounded-full transition-colors cursor-pointer"
+                className="p-2 text-red-500 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 rounded-full transition-colors cursor-pointer"
                 title="Cancel recording"
               >
                 <Trash2 size={20} />
               </button>
 
-              {/* Send Voice Note button */}
               <button
                 type="button"
                 onClick={sendRecording}
@@ -1003,8 +1030,8 @@ const ChatArea = () => {
                 setEmojiPickerOpen((p) => !p);
                 setAttachmentOpen(false);
               }}
-              className={`p-2 rounded-full transition-colors ${
-                emojiPickerOpen ? 'text-[#00a884] bg-black/5' : 'text-[#54656f] hover:bg-black/5'
+              className={`p-2 rounded-full transition-colors cursor-pointer ${
+                emojiPickerOpen ? 'text-[#00a884] bg-black/5 dark:bg-white/10' : 'text-[#54656f] dark:text-[#aebac1] hover:bg-black/5 dark:hover:bg-white/5'
               }`}
               title="Emoji"
             >
@@ -1017,27 +1044,27 @@ const ChatArea = () => {
                 setAttachmentOpen((p) => !p);
                 setEmojiPickerOpen(false);
               }}
-              className={`p-2 rounded-full transition-colors ${
-                attachmentOpen ? 'text-[#00a884] bg-black/5' : 'text-[#54656f] hover:bg-black/5'
+              className={`p-2 rounded-full transition-colors cursor-pointer ${
+                attachmentOpen ? 'text-[#00a884] bg-black/5 dark:bg-white/10' : 'text-[#54656f] dark:text-[#aebac1] hover:bg-black/5 dark:hover:bg-white/5'
               }`}
               title="Attach"
             >
               <Plus size={22} />
             </button>
 
-            <div className="flex-1 bg-white rounded-xl px-3.5 sm:px-4 py-2 border border-transparent focus-within:shadow-xs focus-within:border-[#00a884]/30 transition-all">
+            <div className="flex-1 bg-white dark:bg-[#2a3942] rounded-xl px-3.5 sm:px-4 py-2 border border-transparent focus-within:shadow-xs focus-within:border-[#00a884]/30 transition-all">
               <input
                 ref={inputRef}
                 type="text"
                 value={text}
                 onChange={handleInputChange}
                 onKeyDown={handleKeyDown}
-                placeholder="Type a message"
-                className="w-full text-base sm:text-sm text-[#111b21] placeholder-[#8696a0] focus:outline-none bg-transparent"
+                placeholder={selectedFile ? 'Add a caption...' : 'Type a message'}
+                className="w-full text-base sm:text-sm text-[#111b21] dark:text-[#e9edef] placeholder-[#8696a0] focus:outline-none bg-transparent"
               />
             </div>
 
-            {text.trim() ? (
+            {text.trim() || selectedFile ? (
               <button
                 type="button"
                 onClick={handleSend}
@@ -1050,7 +1077,7 @@ const ChatArea = () => {
               <button
                 type="button"
                 onClick={startRecording}
-                className="p-2 text-[#54656f] hover:text-[#00a884] hover:bg-black/5 rounded-full transition-colors cursor-pointer"
+                className="p-2 text-[#54656f] dark:text-[#aebac1] hover:text-[#00a884] hover:bg-black/5 dark:hover:bg-white/5 rounded-full transition-colors cursor-pointer"
                 title="Record voice message"
               >
                 <Mic size={22} />
@@ -1060,15 +1087,25 @@ const ChatArea = () => {
         )}
       </div>
 
-      {/* Voice / Video Call Modal */}
-      <CallModal
-        isOpen={callState.isOpen}
-        onClose={() => setCallState({ isOpen: false, type: 'voice' })}
-        user={selectedUser}
-        type={callState.type}
+      {/* ── 4. 3-Way Message Deletion Modal ── */}
+      <DeleteMessageModal
+        isOpen={Boolean(deleteModalMsg)}
+        onClose={() => setDeleteModalMsg(null)}
+        onDeleteForMe={handleDeleteForMe}
+        onDeleteForEveryone={handleDeleteForEveryone}
+        isMine={
+          deleteModalMsg
+            ? (deleteModalMsg.sender?._id || deleteModalMsg.sender)?.toString() ===
+              user?._id?.toString()
+            : false
+        }
+        isDeleting={isDeletingMessage}
       />
     </div>
   );
-};
+});
 
+ChatArea.displayName = 'ChatArea';
+
+export { ChatArea as ChatContainer };
 export default ChatArea;

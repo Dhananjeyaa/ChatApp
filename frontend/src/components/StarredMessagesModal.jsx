@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { X, Star, ArrowRight, Trash2 } from 'lucide-react';
 import Avatar from './Avatar';
 import axios from 'axios';
+import { lockBodyScroll, unlockBodyScroll } from '../utils/scrollLock';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
@@ -66,14 +67,13 @@ const StarredMessagesModal = ({
 
   useEffect(() => {
     if (!isOpen) return;
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+    lockBodyScroll();
     const handleKeyDown = (e) => {
       if (e.key === 'Escape') onClose?.();
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => {
-      document.body.style.overflow = prevOverflow;
+      unlockBodyScroll();
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [isOpen, onClose]);
@@ -82,12 +82,12 @@ const StarredMessagesModal = ({
 
   return createPortal(
     <div
-      className="fixed inset-0 w-screen h-screen bg-black/50 backdrop-blur-xs z-[9999] flex items-center justify-center p-3 sm:p-4 overflow-y-auto transition-opacity"
+      className="fixed inset-0 w-screen h-screen bg-black/50 backdrop-blur-xs z-[1000] flex items-center justify-center p-3 sm:p-4 overflow-y-auto transition-opacity"
       style={{ backdropFilter: 'blur(4px)', WebkitBackdropFilter: 'blur(4px)' }}
       onClick={onClose}
     >
       <div
-        className="bg-white rounded-2xl sm:rounded-3xl max-w-lg w-full shadow-2xl relative border border-[#e9edef] overflow-hidden flex flex-col max-h-[92vh] sm:max-h-[85vh] my-auto animate-in fade-in zoom-in-95 duration-150 shrink-0"
+        className="bg-white dark:bg-[#111b21] rounded-2xl sm:rounded-3xl max-w-lg w-full shadow-2xl relative border border-[#e9edef] dark:border-[#222e35] overflow-hidden flex flex-col max-h-[92vh] sm:max-h-[85vh] my-auto animate-in fade-in zoom-in-95 duration-150 shrink-0 text-[#111b21] dark:text-[#e9edef]"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -114,10 +114,10 @@ const StarredMessagesModal = ({
             </div>
           ) : starredMessages.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-center text-[#8696a0] gap-3">
-              <div className="w-16 h-16 rounded-full bg-[#f0f2f5] flex items-center justify-center text-[#8696a0]">
+              <div className="w-16 h-16 rounded-full bg-[#f0f2f5] dark:bg-[#202c33] flex items-center justify-center text-[#8696a0]">
                 <Star size={32} />
               </div>
-              <h4 className="text-base font-medium text-[#41525d]">No starred messages</h4>
+              <h4 className="text-base font-medium text-[#41525d] dark:text-[#e9edef]">No starred messages</h4>
               <p className="text-xs text-[#8696a0] max-w-xs leading-relaxed">
                 Bookmark important messages in any chat using the star action.
               </p>
@@ -132,7 +132,7 @@ const StarredMessagesModal = ({
                 <div
                   key={msg._id}
                   onClick={() => handleNavigate(msg)}
-                  className="bg-[#f0f2f5] hover:bg-[#e7f7f3]/50 border border-[#e9edef] hover:border-[#00a884]/40 rounded-xl p-3.5 cursor-pointer transition-all group relative"
+                  className="bg-[#f0f2f5] dark:bg-[#202c33] hover:bg-[#e7f7f3]/50 dark:hover:bg-[#2a3942] border border-[#e9edef] dark:border-[#222e35] hover:border-[#00a884]/40 rounded-xl p-3.5 cursor-pointer transition-all group relative"
                 >
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-2">
@@ -141,7 +141,7 @@ const StarredMessagesModal = ({
                         name={partner?.name}
                         size={28}
                       />
-                      <span className="text-xs font-semibold text-[#111b21]">
+                      <span className="text-xs font-semibold text-[#111b21] dark:text-[#e9edef]">
                         {senderName}{' '}
                         <span className="text-[#8696a0] font-normal">
                           {isMine && partner ? `to ${partner.name}` : ''}
@@ -167,7 +167,7 @@ const StarredMessagesModal = ({
                     </div>
                   </div>
 
-                  <p className="text-sm text-[#111b21] pl-9 pr-6 leading-relaxed line-clamp-3">
+                  <p className="text-sm text-[#111b21] dark:text-[#d1d7db] pl-9 pr-6 leading-relaxed line-clamp-3">
                     {msg.message}
                   </p>
 

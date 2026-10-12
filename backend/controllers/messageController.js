@@ -3,12 +3,17 @@ import Group from '../models/Group.js';
 import User from '../models/User.js';
 import { getConversationId } from '../utils/chatUtils.js';
 
-// @desc    Get chat history between current user and selected user (or group)
-// @route   GET /api/messages/:userId
+// ─── Projections ─────────────────────────────────────────────────────────────
+const MESSAGE_PROJECTION =
+  '_id conversationId sender receiver isGroup groupId message messageType mediaUrl mediaDuration status starredBy deletedFor isDeleted deletedAt createdAt timestamp';
+
+// @desc    Get chat history with cursor-based pagination
+// @route   GET /api/messages/:userId?cursor=<lastId>&limit=50
 // @access  Private
 export const getMessages = async (req, res) => {
   try {
     const { userId: targetId } = req.params;
+    const { cursor, limit = 50 } = req.query;
     const myId = req.user._id;
 
     // Determine if targetId is a group ID or user ID
@@ -20,20 +25,56 @@ export const getMessages = async (req, res) => {
     }
 
     const conversationId = isGroup ? targetId : getConversationId(myId, targetId);
+    const pageSize = Math.min(Math.max(parseInt(limit, 10) || 50, 1), 100);
 
-    const messages = await Message.find({ conversationId })
-      .populate('sender', 'name profilePic')
-      .sort({ createdAt: 1 });
-
-    if (!isGroup) {
-      // Mark any unread messages sent by targetId to me as 'read'
-      await Message.updateMany(
-        { sender: targetId, receiver: myId, status: { $ne: 'read' } },
-        { status: 'read' }
-      );
+    // Filter out messages deleted specifically for the requesting user
+    const filter = {
+      conversationId,
+      deletedFor: { $ne: myId },
+    };
+    if (cursor) {
+      filter._id = { $lt: cursor };
     }
 
-    res.status(200).json(messages);
+    // High performance query: indexed on { conversationId: 1, _id: -1 }, lean + selective projection
+    const rawMessages = await Message.find(filter)
+      .sort({ _id: -1 })
+      .limit(pageSize + 1)
+      .select(MESSAGE_PROJECTION)
+      .populate('sender', 'name profilePic')
+      .populate('receiver', 'name profilePic')
+      .lean();
+
+    const hasMore = rawMessages.length > pageSize;
+    const paginatedMessages = hasMore ? rawMessages.slice(0, pageSize) : rawMessages;
+
+    // Reverse to chronological order (oldest to newest) for UI consumption
+    paginatedMessages.reverse();
+
+    const nextCursor = hasMore && paginatedMessages.length > 0 ? paginatedMessages[0]._id : null;
+
+    if (!isGroup) {
+      // Mark unread messages sent by target to me as read asynchronously
+      Message.updateMany(
+        { sender: targetId, receiver: myId, status: { $ne: 'read' } },
+        { status: 'read' }
+      ).catch((err) => console.warn('mark read update error:', err.message));
+    }
+
+    // Set cursor pagination metadata headers
+    res.set('X-Has-More', String(hasMore));
+    if (nextCursor) res.set('X-Next-Cursor', String(nextCursor));
+
+    // Support both structured paginated response and direct array format
+    if (req.query.paginated === 'true') {
+      return res.status(200).json({
+        messages: paginatedMessages,
+        nextCursor,
+        hasMore,
+      });
+    }
+
+    return res.status(200).json(paginatedMessages);
   } catch (error) {
     console.error('Error in getMessages controller:', error.message);
     res.status(500).json({ message: 'Server error while fetching messages' });
@@ -46,20 +87,20 @@ export const getMessages = async (req, res) => {
 export const toggleStarMessage = async (req, res) => {
   try {
     const { messageId } = req.params;
-    const message = await Message.findById(messageId);
+    const userId = req.user._id;
+
+    const message = await Message.findById(messageId).select('_id starredBy').lean();
     if (!message) return res.status(404).json({ message: 'Message not found' });
 
-    const userIdStr = req.user._id.toString();
-    const isStarred = (message.starredBy || []).some((id) => id.toString() === userIdStr);
+    const isStarred = (message.starredBy || []).some(
+      (id) => id.toString() === userId.toString()
+    );
 
-    if (isStarred) {
-      message.starredBy = message.starredBy.filter((id) => id.toString() !== userIdStr);
-    } else {
-      if (!message.starredBy) message.starredBy = [];
-      message.starredBy.push(req.user._id);
-    }
+    const update = isStarred
+      ? { $pull: { starredBy: userId } }
+      : { $addToSet: { starredBy: userId } };
 
-    await message.save();
+    await Message.findByIdAndUpdate(messageId, update);
 
     return res.status(200).json({
       success: true,
@@ -77,15 +118,90 @@ export const toggleStarMessage = async (req, res) => {
 // @access  Private
 export const getStarredMessages = async (req, res) => {
   try {
-    const messages = await Message.find({ starredBy: req.user._id })
+    const messages = await Message.find({
+      starredBy: req.user._id,
+      deletedFor: { $ne: req.user._id },
+    })
+      .sort({ createdAt: -1 })
+      .select(MESSAGE_PROJECTION)
       .populate('sender', 'name profilePic')
       .populate('receiver', 'name profilePic')
-      .sort({ createdAt: -1 });
+      .lean();
 
     return res.status(200).json(messages);
   } catch (error) {
     console.error('Error in getStarredMessages:', error.message);
     res.status(500).json({ message: 'Server error while fetching starred messages' });
+  }
+};
+
+// @desc    Delete message for current user only ("Delete for Me")
+// @route   POST /api/messages/:messageId/delete-for-me
+// @access  Private
+export const deleteMessageForMe = async (req, res) => {
+  try {
+    const { messageId } = req.params;
+    const userId = req.user._id;
+
+    const message = await Message.findById(messageId);
+    if (!message) {
+      return res.status(404).json({ message: 'Message not found' });
+    }
+
+    // Add user ID to deletedFor array
+    await Message.findByIdAndUpdate(messageId, {
+      $addToSet: { deletedFor: userId },
+    });
+
+    return res.status(200).json({
+      success: true,
+      messageId,
+      deletedForMe: true,
+    });
+  } catch (error) {
+    console.error('Error in deleteMessageForMe controller:', error.message);
+    res.status(500).json({ message: 'Server error while deleting message for me' });
+  }
+};
+
+// @desc    Delete message for everyone ("Delete for Everyone")
+// @route   POST /api/messages/:messageId/delete-for-everyone
+// @access  Private
+export const deleteMessageForEveryone = async (req, res) => {
+  try {
+    const { messageId } = req.params;
+    const userId = req.user._id;
+
+    const message = await Message.findById(messageId);
+    if (!message) {
+      return res.status(404).json({ message: 'Message not found' });
+    }
+
+    // Security check: Only the sender can delete for everyone
+    const senderId = (message.sender?._id || message.sender || message.senderId)?.toString();
+    if (senderId !== userId.toString()) {
+      return res.status(403).json({ message: 'Only the sender can delete this message for everyone' });
+    }
+
+    // Mark as deleted, clear media and message content for privacy
+    message.isDeleted = true;
+    message.message = 'This message was deleted';
+    message.mediaUrl = '';
+    message.mediaDuration = 0;
+    message.deletedAt = new Date();
+    await message.save();
+
+    return res.status(200).json({
+      success: true,
+      messageId,
+      message: 'This message was deleted',
+      isDeleted: true,
+      conversationId: message.conversationId,
+      receiverId: message.receiver?.toString() || message.receiverId?.toString(),
+    });
+  } catch (error) {
+    console.error('Error in deleteMessageForEveryone controller:', error.message);
+    res.status(500).json({ message: 'Server error while deleting message for everyone' });
   }
 };
 
@@ -114,14 +230,14 @@ export const deleteChat = async (req, res) => {
 
     const conversationId = getConversationId(myId, targetId);
 
-    // Permanently delete all messages between req.user._id and userId
+    // Permanently delete all messages utilizing compound indexes
     await Message.deleteMany({
       $or: [
-        { senderId: myId, receiverId: targetId },
-        { senderId: targetId, receiverId: myId },
+        { conversationId },
         { sender: myId, receiver: targetId },
         { sender: targetId, receiver: myId },
-        { conversationId },
+        { senderId: myId, receiverId: targetId },
+        { senderId: targetId, receiverId: myId },
       ],
     });
 
@@ -136,4 +252,3 @@ export const deleteChat = async (req, res) => {
     res.status(500).json({ message: 'Server error while deleting chat' });
   }
 };
-
